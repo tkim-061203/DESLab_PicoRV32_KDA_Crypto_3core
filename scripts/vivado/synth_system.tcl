@@ -1,44 +1,28 @@
 # Merged TCL Script
 
+# All RTL lives under <repo>/rtl/ ; this script runs with CWD = scripts/vivado/.
+# Read order is unchanged from the pre-consolidation script on purpose, so the
+# resulting netlist and reports stay directly comparable.
+#
+# MUST be invoked from scripts/vivado/ : system.v does
+#   initial $readmemh("bootloader.hex", boot_mem)
+# which resolves against the tool's CWD, not the .v file's directory.
+
 # Wrapper and System Verilog Files
-read_verilog system.v
-read_verilog axi_to_apb_bridge.v
-read_verilog apb_interconnect.v
-read_verilog crypto_cluster.v
-read_verilog ../../picosoc/aead_mmap_wrapper.v
-read_verilog ../../picosoc/simple_spi_master.v
-read_verilog ../../picorv32.v
-read_verilog ../../picosoc/simpleuart.v
-
-
-# TinyJambu Core
-read_verilog ../../picosoc/tinyjambu/tinyjambu_core.v
-
-# Xoodyak Core
-read_verilog ../../picosoc/Xoodyak_old/xoodoo.v
-read_verilog ../../picosoc/Xoodyak_old/xoodoo_n_rounds.v
-read_verilog ../../picosoc/Xoodyak_old/xoodoo_rc.v
-read_verilog ../../picosoc/Xoodyak_old/xoodoo_round.v
-read_verilog ../../picosoc/Xoodyak_old/xoodyakcore.v
-
-# GIFT-COFB Core
-read_verilog ../../picosoc/GIFT_COFB/cofb_core.v
-read_verilog ../../picosoc/GIFT_COFB/double_half_block.v
-read_verilog ../../picosoc/GIFT_COFB/feedback_G.v
-read_verilog ../../picosoc/GIFT_COFB/gift128_addroundkey.v
-read_verilog ../../picosoc/GIFT_COFB/gift128_encrypt_top.v
-read_verilog ../../picosoc/GIFT_COFB/gift128_keyschedule.v
-read_verilog ../../picosoc/GIFT_COFB/gift128_permbits.v
-read_verilog ../../picosoc/GIFT_COFB/gift128_round.v
-read_verilog ../../picosoc/GIFT_COFB/gift128_roundconst.v
-read_verilog ../../picosoc/GIFT_COFB/gift128_subcells.v
-read_verilog ../../picosoc/GIFT_COFB/padding.v
-read_verilog ../../picosoc/GIFT_COFB/pho.v
-read_verilog ../../picosoc/GIFT_COFB/pho1.v
-read_verilog ../../picosoc/GIFT_COFB/phoprime.v
-read_verilog ../../picosoc/GIFT_COFB/triple_half_block.v
-read_verilog ../../picosoc/GIFT_COFB/xor_block.v
-read_verilog ../../picosoc/GIFT_COFB/xor_topbar_block.v
+read_verilog ../../rtl/soc/system.v
+read_verilog ../../rtl/soc/axi_to_apb_bridge.v
+read_verilog ../../rtl/soc/apb_interconnect.v
+# ---- Crypto subsystem ----
+# Five files: the cluster and its MMIO wrapper, plus one file per cipher
+# holding all of that cipher's sub-modules.  One copy of every module.
+read_verilog ../../rtl/crypto/crypto_cluster.v
+read_verilog ../../rtl/crypto/aead_mmap_wrapper.v
+read_verilog ../../rtl/crypto/tinyjambu.v
+read_verilog ../../rtl/crypto/xoodyak.v
+read_verilog ../../rtl/crypto/gift_cofb.v
+read_verilog ../../rtl/peripherals/simple_spi_master.v
+read_verilog ../../rtl/cpu/picorv32.v
+read_verilog ../../rtl/peripherals/simpleuart.v
 
 # Constraints
 read_xdc synth_system.xdc
@@ -58,7 +42,7 @@ write_verilog -force synth_system.v
 write_bitstream -force synth_system.bit
 
 proc report_core_timing {inst_path report_file} {
-    set inst [get_cells $inst_path]
+    set inst [get_cells -quiet $inst_path]
     if {[llength $inst] == 0} {
         set fh [open $report_file "w"]
         puts $fh "Instance not found: $inst_path"
@@ -66,7 +50,7 @@ proc report_core_timing {inst_path report_file} {
         return
     }
 
-    set regs [get_cells -hierarchical -filter {IS_SEQUENTIAL} "${inst_path}/*"]
+    set regs [get_cells -hierarchical -quiet -filter "IS_SEQUENTIAL && NAME =~ ${inst_path}/*"]
     if {[llength $regs] == 0} {
         set fh [open $report_file "w"]
         puts $fh "No sequential cells found under $inst_path"

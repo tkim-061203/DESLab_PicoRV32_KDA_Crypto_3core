@@ -15,13 +15,15 @@ create_project -force rv_picosoc ./project -part $part
 
 # ====================== ADD SOURCES ======================
 
+# All synthesisable RTL lives under <repo>/rtl/.
+# Deliberately NOT globbed:
+#   $origin_dir  -> would pull in generated netlists or testbenches
+#   rtl/tb       -> testbench belongs in sim_1, not sources_1
 set src_dirs [list \
-    "$origin_dir" \
-    "$origin_dir/../../" \
-    "$origin_dir/../../picosoc" \
-    "$origin_dir/../../picosoc/GIFT_COFB" \
-    "$origin_dir/../../picosoc/tinyjambu" \
-    "$origin_dir/../../picosoc/Xoodyak_old" \
+    "$origin_dir/../../rtl/cpu" \
+    "$origin_dir/../../rtl/soc" \
+    "$origin_dir/../../rtl/peripherals" \
+    "$origin_dir/../../rtl/crypto" \
 ]
 
 foreach dir $src_dirs {
@@ -39,6 +41,14 @@ foreach dir $src_dirs {
     } else {
         puts "Không tìm thấy thư mục: $dir"
     }
+}
+
+# Testbench goes into the simulation fileset, not sources_1
+set tb_file "$origin_dir/../../rtl/tb/system_tb.v"
+if {[file exists $tb_file]} {
+    add_files -fileset sim_1 $tb_file
+    set_property top system_tb [get_filesets sim_1]
+    puts "Đã add testbench: $tb_file"
 }
 
 # Add thêm file .xdc nếu có (constraints)

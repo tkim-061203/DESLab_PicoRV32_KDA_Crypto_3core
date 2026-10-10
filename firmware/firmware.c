@@ -1,15 +1,39 @@
 #include <stdint.h>
 
 #include <stddef.h>
+/* The app SRAM macro has no byte write-enable, so word stores are the only
+   efficient way into RAM.  Take a word path whenever both pointers are aligned;
+   everything this firmware copies (uint32_t test vectors, 128-bit blocks) is. */
 void *memcpy(void *d, const void *s, size_t n) {
   uint8_t *dd = (uint8_t *)d;
   const uint8_t *ss = (const uint8_t *)s;
+  if ((((uintptr_t)dd | (uintptr_t)ss) & 3u) == 0u) {
+    uint32_t *dw = (uint32_t *)d;
+    const uint32_t *sw = (const uint32_t *)s;
+    while (n >= 4u) {
+      *dw++ = *sw++;
+      n -= 4u;
+    }
+    dd = (uint8_t *)dw;
+    ss = (const uint8_t *)sw;
+  }
   while (n--)
     *dd++ = *ss++;
   return d;
 }
 void *memset(void *d, int c, size_t n) {
   uint8_t *dd = (uint8_t *)d;
+  if (((uintptr_t)dd & 3u) == 0u) {
+    uint32_t w = (uint32_t)(uint8_t)c;
+    uint32_t *dw = (uint32_t *)d;
+    w |= w << 8;
+    w |= w << 16;
+    while (n >= 4u) {
+      *dw++ = w;
+      n -= 4u;
+    }
+    dd = (uint8_t *)dw;
+  }
   while (n--)
     *dd++ = (uint8_t)c;
   return d;
@@ -67,6 +91,18 @@ void *memset(void *d, int c, size_t n) {
 
 /* ---- UART ---- */
 void pc(char c) {
+#ifdef GL_SMOKE
+  /* Gate-level runs only.  The netlist hardens UART_TX_HOLDOFF at 9000, so
+     every character costs ~9000 cycles of busy-wait below and the testbench
+     can no longer override the parameter.  Route the console to OUTBYTE
+     instead, which has no holdoff, marking each character with bit 7.  ps/pd/ph
+     only ever emit printable ASCII and \r\n, i.e. <= 0x7E, so the marked values
+     land in 0x80..0xFE and cannot collide with the 0xFF pass code or the 0x55
+     fail code.  Decoded by sim/gl/system_nl_tb.v. */
+  if (c == '\n')
+    OUTBYTE = (uint32_t)'\r' | 0x80u;
+  OUTBYTE = (uint32_t)(unsigned char)c | 0x80u;
+#else
   if (c == '\n') {
     while (!(UART_ST & 1))
       ;
@@ -75,13 +111,17 @@ void pc(char c) {
   while (!(UART_ST & 1))
     ;
   UART_TX = c;
+#endif
 }
 void ps(const char *s) {
   while (*s)
     pc(*s++);
 }
 void ph(uint32_t v) {
-  const char h[] = "0123456789abcdef";
+  /* static: a plain local const array makes gcc memcpy the table onto the
+     stack on every call, which is 17 byte stores into RAM.  static keeps it in
+     .rodata and indexes it in place. */
+  static const char h[] = "0123456789abcdef";
   for (int i = 28; i >= 0; i -= 4)
     pc(h[(v >> i) & 0xF]);
 }
@@ -102,18 +142,19 @@ void p64(const uint32_t w[2]) {
   ph(w[0]);
 }
 void pd(uint32_t v) {
-  char buf[10];
+  /* uint32_t rather than char: a char buffer costs one byte store per digit. */
+  uint32_t buf[10];
   int n = 0;
   if (!v) {
     pc('0');
     return;
   }
   while (v) {
-    buf[n++] = '0' + (v % 10u);
+    buf[n++] = (uint32_t)('0' + (v % 10u));
     v /= 10u;
   }
   while (n--)
-    pc(buf[n]);
+    pc((char)buf[n]);
 }
 void ln(void) { ps("# ----------------------------------------\n"); }
 
