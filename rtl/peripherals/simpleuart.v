@@ -23,6 +23,7 @@ module simpleuart #(parameter integer DEFAULT_DIV = 1) (
 
 	output ser_tx,
 	input  ser_rx,
+	output tx_busy,
 
 	input   [3:0] reg_div_we,
 	input  [31:0] reg_div_di,
@@ -51,6 +52,7 @@ module simpleuart #(parameter integer DEFAULT_DIV = 1) (
 
 	assign reg_dat_wait = reg_dat_we && (send_bitcnt || send_dummy);
 	assign reg_dat_do = recv_buf_valid ? recv_buf_data : ~0;
+	assign tx_busy = (send_bitcnt != 0) || send_dummy;
 
 	always @(posedge clk) begin
 		if (!resetn) begin

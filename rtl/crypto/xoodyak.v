@@ -580,7 +580,6 @@ module xoodyakcore (
   // =========================================================================
   wire [31:0] data_in_word = get_word(data_in, word_cnt_r[1:0]);
   wire [31:0] data_xor     = xoodoo_word_out ^ data_in_word;
-  wire [31:0] data_xor_swp = byte_swap(data_xor);
 
   // Single 4:1 mux for tag_in word selection (tag_in port used directly)
   reg [31:0] tag_in_slice;
@@ -592,6 +591,48 @@ module xoodyakcore (
       default: tag_in_slice = tag_in[31:0];
     endcase
   end
+
+  // =========================================================================
+  // Byte lane masks — get_word/byte_swap put message byte 0 in bits[7:0],
+  // so keeping the low len[1:0] bytes of the last (possibly partial) word
+  // and zeroing the rest stops bytes beyond ad_length/data_length from
+  // polluting the sponge state, leaking keystream, or (on decrypt) being
+  // absorbed as if they were valid ciphertext.
+  // =========================================================================
+  wire ad_last_word   = (word_cnt_r[1:0] == ad_word_cnt_max_r) &&
+                         (ad_length_r[1:0] != 2'b00);
+  wire data_last_word = (word_cnt_r[1:0] == data_word_cnt_max_r) &&
+                         (data_length_r[1:0] != 2'b00);
+
+  reg [31:0] ad_mask;
+  always @(*) begin
+    if (ad_last_word)
+      case (ad_length_r[1:0])
+        2'd1:    ad_mask = 32'h000000FF;
+        2'd2:    ad_mask = 32'h0000FFFF;
+        default: ad_mask = 32'h00FFFFFF;   // 2'd3
+      endcase
+    else
+      ad_mask = 32'hFFFFFFFF;
+  end
+
+  reg [31:0] data_mask;
+  always @(*) begin
+    if (data_last_word)
+      case (data_length_r[1:0])
+        2'd1:    data_mask = 32'h000000FF;
+        2'd2:    data_mask = 32'h0000FFFF;
+        default: data_mask = 32'h00FFFFFF;   // 2'd3
+      endcase
+    else
+      data_mask = 32'hFFFFFFFF;
+  end
+
+  // Masked XOR value used both to feed the sponge on decrypt and to build
+  // data_out — bytes past data_length are zeroed so decrypt leaves the
+  // state unchanged past the message length and data_out never leaks
+  // keystream in those byte positions.
+  wire [31:0] data_xor_masked = data_xor & data_mask;
 
   // =========================================================================
   // OPT-1: Pad byte word — 4:1 mux replacing two barrel shifters
@@ -828,7 +869,7 @@ module xoodyakcore (
 
       S_LOAD_AD:
       begin
-        xoodoo_word_in  = get_word(ad, word_cnt_r[1:0]);    // port direct
+        xoodoo_word_in  = get_word(ad, word_cnt_r[1:0]) & ad_mask; // port direct, masked past ad_length
         xoodoo_word_idx = {1'b0, word_cnt_r};
         xoodoo_word_en  = 1'b1;
       end
@@ -847,10 +888,12 @@ module xoodyakcore (
       begin
         // OPT-3: sel_dec_r (was: sel_type_r == MODE_AEAD_DEC)
         // data_in_word uses data_in port directly (OPT-7)
+        // Masked past data_length: on decrypt this XORs 0 into the state
+        // (state unchanged), the correct Cyclist behaviour for pad bytes.
         if (sel_dec_r)
-          xoodoo_word_in = data_xor;       // DEC: absorb PT = state XOR CT
+          xoodoo_word_in = data_xor_masked;             // DEC: absorb PT = state XOR CT
         else
-          xoodoo_word_in = data_in_word;   // ENC: absorb PT directly
+          xoodoo_word_in = data_in_word & data_mask;     // ENC: absorb PT directly
         xoodoo_word_idx = {1'b0, word_cnt_r};
         xoodoo_word_en  = 1'b1;
       end
@@ -881,11 +924,13 @@ module xoodyakcore (
       data_out <= 128'b0;
     else if (state_r == S_LOAD_DATA)
     begin
+      // Masked so bytes past data_length read back as 0 instead of leaking
+      // keystream (encrypt) or raw CT (decrypt).
       case (word_cnt_r[1:0])
-        2'd0:    data_out[127:96] <= data_xor_swp;
-        2'd1:    data_out[95:64]  <= data_xor_swp;
-        2'd2:    data_out[63:32]  <= data_xor_swp;
-        default: data_out[31:0]   <= data_xor_swp;
+        2'd0:    data_out[127:96] <= byte_swap(data_xor_masked);
+        2'd1:    data_out[95:64]  <= byte_swap(data_xor_masked);
+        2'd2:    data_out[63:32]  <= byte_swap(data_xor_masked);
+        default: data_out[31:0]   <= byte_swap(data_xor_masked);
       endcase
     end
   end
@@ -893,6 +938,10 @@ module xoodyakcore (
   // =========================================================================
   // Collect Tag Output
   // Write directly to output port tag (no intermediate tag_r)
+  // Only S_EXTRACT_TAG (encrypt) writes tag; S_VERIFY_TAG must not, else a
+  // decrypt with a wrong tag_in would expose the correct computed tag over
+  // APB. tag is also cleared at ena so a decrypt never reads a stale tag
+  // from a previous operation.
   // =========================================================================
   always @(posedge clk or negedge rst_n)
   begin
@@ -900,7 +949,9 @@ module xoodyakcore (
       tag <= 128'b0;
     else if (restart)
       tag <= 128'b0;
-    else if (state_r == S_EXTRACT_TAG || state_r == S_VERIFY_TAG)
+    else if (state_r == S_IDLE && ena)
+      tag <= 128'b0;
+    else if (state_r == S_EXTRACT_TAG)
     begin
       case (word_cnt_r[1:0])
         2'd0:    tag[127:96] <= byte_swap(xoodoo_word_out);

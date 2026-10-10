@@ -41,8 +41,12 @@ def wrap(elf_path, out_path):
     fw_size = len(fw_data)
     print(f"  Firmware binary: {fw_size} bytes (0x{fw_size:X})")
 
-    if fw_size > 63 * 1024:
-        print(f"WARNING: firmware ({fw_size} B) exceeds 63 KB App BRAM budget!", file=sys.stderr)
+    MAX_FW_BYTES = 0x3800  # 14336 B: App RAM is 16 KB, top 2 KB is BL_RAM
+                           # (bootloader.ld); must match bootloader.c.
+    if fw_size > MAX_FW_BYTES:
+        print(f"WARNING: firmware ({fw_size} B) exceeds {MAX_FW_BYTES} B "
+              f"({MAX_FW_BYTES // 1024} KB) App RAM budget - bootloader "
+              f"will reject this image!", file=sys.stderr)
 
     # Pad to 4-byte boundary
     while len(fw_data) % 4:

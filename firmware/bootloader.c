@@ -3,19 +3,23 @@
  *
  * Memory map:
  *   Boot BRAM : 0x0000_0000 – 0x0000_0FFF  (4 KB, read-only code+rodata)
- *   App  BRAM : 0x0001_0000 – 0x0001_FFFF  (64 KB)
- *     FW area : 0x0001_0000 – 0x0001_EFFF  (60 KB, loaded from SD)
- *     BL data : 0x0001_F000 – 0x0001_FFFF  (4 KB, bootloader .bss + stack)
+ *   App  RAM  : 0x0001_0000 – 0x0001_3FFF  (16 KB)
+ *     FW area : 0x0001_0000 – 0x0001_37FF  (14336 B, loaded from SD)
+ *     BL data : 0x0001_3800 – 0x0001_3FFF  (2 KB, bootloader .data/.bss + stack)
  *
  * SD card layout (sector 2048 = 1 MB offset):
  *   byte [0..3]  firmware size, little-endian uint32
  *   byte [4..]   firmware binary
  *
+ * Debug/sim strap: SWITCHES (0x2000_0000) bit0 = 1 skips SD entirely and
+ * jumps straight to the app already sitting at 0x0001_0000 (preloaded via
+ * $readmemh in sim, or left there by a previous boot).
+ *
  * LED status:
  *   0x01  boot started
  *   0x03  SD init OK
- *   0x07  firmware loaded OK  → jump
- *   0xFF  SD init failed
+ *   0x07  firmware loaded OK  → jump (also used for the sw0 strap jump)
+ *   0xE1  SD init failed
  *   0xFE  firmware load failed
  */
 
@@ -29,6 +33,8 @@
 #define UART_STATUS (*(volatile uint32_t *)0x1000000C)
 /* UART_STATUS[0] = tx_ready (!tx_busy) */
 
+#define SWITCHES (*(volatile uint32_t *)0x20000000) /* [0]=sw0: skip-SD strap */
+
 #define SD_DATA (*(volatile uint32_t *)0x60000000)   /* W=tx  R=rx      */
 #define SD_STATUS (*(volatile uint32_t *)0x60000004) /* [1]=busy [0]=done */
 #define SD_CS (*(volatile uint32_t *)0x60000008)     /* [0]=cs_n          */
@@ -36,7 +42,10 @@
 
 #define APP_BASE 0x00010000UL
 #define APP_START_SECTOR 2048UL
-#define MAX_FW_BYTES (60UL * 1024UL)
+/* App RAM is 16 KB (0x1_0000-0x1_3FFF); BL_RAM (bootloader.ld) takes the
+ * top 2 KB (0x1_3800-0x1_4000) for the bootloader's own .data/.bss/stack,
+ * so the firmware image loaded here must not exceed the bottom 14 KB. */
+#define MAX_FW_BYTES 0x3800UL
 
 /* =========================================================
  * memcpy (no stdlib)
@@ -298,8 +307,8 @@ static int sd_read_sector(uint32_t sector, uint8_t *buf) {
 /* =========================================================
  * load_fw — read header, load full firmware to App BRAM
  *
- * sbuf[512] is located in BL_RAM (0x1F000+) via linker script,
- * NOT conflicting with firmware load area (0x10000+).
+ * sbuf[512] is located in BL_RAM (0x1_3800+) via linker script,
+ * NOT conflicting with firmware load area (0x1_0000+).
  * ========================================================= */
 static uint8_t sbuf[512];
 
@@ -356,6 +365,17 @@ void bootloader_main(void) {
   uart_puts("\r\n====================\r\n");
   uart_puts("[BOOT] SD Bootloader\r\n");
   uart_puts("====================\r\n");
+
+  /* --- Debug/sim strap: sw[0]=1 skips SD entirely and jumps straight to
+   * the app already sitting in App RAM (preloaded via $readmemh in sim,
+   * or left there by a previous boot). --- */
+  if (SWITCHES & 0x1) {
+    uart_puts("[BOOT] sw0=1: skip SD, jump 0x00010000\r\n");
+    LED = 0x07;
+    ((void (*)(void))APP_BASE)();
+    while (1)
+      ;
+  }
 
   /* --- SD init --- */
   uart_puts("[1] SD Init\r\n");

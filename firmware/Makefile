@@ -50,6 +50,23 @@ $(BOOT_DUMP): $(BOOT_ELF)
 	$(OBJDUMP) -d -S $< > $@
 
 # -------------------------------------------------------
+# 1b. ASIC BOOT ROM  (openlane/designs/picosoc/src/boot_rom.v)
+#     Bakes bootloader.hex into a registered case-statement ROM that
+#     replaces the old u_boot_sram macro (which had no write port wired
+#     up and so could never actually be loaded on silicon). Must be
+#     regenerated any time bootloader.c/bootloader.ld changes, and
+#     OpenLane re-run afterwards.
+# -------------------------------------------------------
+BOOT_ROM_V = ../openlane/designs/picosoc/src/boot_rom.v
+
+.PHONY: boot_rom
+boot_rom: $(BOOT_ROM_V)
+
+$(BOOT_ROM_V): $(BOOT_HEX) gen_boot_rom.py
+	python3 gen_boot_rom.py $(BOOT_HEX) $@
+	@echo "[BOOT] boot_rom.v ready -> re-run OpenLane synthesis to pick it up"
+
+# -------------------------------------------------------
 # 2. APPLICATION FIRMWARE  (loaded into App BRAM @ 0x0001_0000)
 # -------------------------------------------------------
 # List your application source files here:
@@ -82,24 +99,51 @@ $(APP_DUMP): $(APP_ELF)
 # 3. Write firmware to SD card
 #    WARNING: Replace /dev/sdX with your actual SD device!
 # -------------------------------------------------------
-SD_DEV ?= /dev/null   # Override: make write-sd SD_DEV=/dev/sdb
+# Override: make write-sd SD_DEV=/dev/sdc
+SD_DEV ?= /dev/sdb
 
-.PHONY: write-sd
+.PHONY: write-sd write_sd
+write_sd: write-sd
+
 write-sd: $(APP_BIN)
-	@if [ "$(SD_DEV)" = "/dev/null" ]; then \
-	    echo "ERROR: set SD_DEV=<device>  e.g.  make write-sd SD_DEV=/dev/sdb"; \
+	@if [ ! -b "$(SD_DEV)" ]; then \
+	    echo "ERROR: $(SD_DEV) khong phai block device (the SD da noi vao VM chua?)"; \
+	    lsblk -d -o NAME,SIZE,TRAN,RM,MODEL; \
+	    exit 1; \
+	fi
+	@if findmnt -rno SOURCE / | grep -q "^$(SD_DEV)"; then \
+	    echo "ERROR: $(SD_DEV) chua root filesystem - tu choi ghi"; \
+	    exit 1; \
+	fi
+	@lsblk -d -o NAME,SIZE,TRAN,RM,MODEL $(SD_DEV)
+	@echo "Unmounting $(SD_DEV)* (if auto-mounted)..."
+	-@for m in $$(findmnt -rno TARGET -S $(SD_DEV) 2>/dev/null; \
+	             lsblk -rno MOUNTPOINT $(SD_DEV) 2>/dev/null); do \
+	    sudo umount "$$m"; \
+	done
+	@# Phan vung FAT cua the thuong bat dau dung sector 2048: ghi khi con
+	@# mount thi kernel co the ghi nguoc FAT/FSInfo de len firmware.
+	@if [ -n "$$(lsblk -rno MOUNTPOINT $(SD_DEV) | tr -d '[:space:]')" ]; then \
+	    echo "ERROR: $(SD_DEV) van dang mount (dong File Manager roi thu lai):"; \
+	    lsblk -o NAME,MOUNTPOINT $(SD_DEV); \
 	    exit 1; \
 	fi
 	@echo "Writing $(APP_BIN) to $(SD_DEV) at sector 2048 (1 MB offset)..."
 	sudo dd if=$(APP_BIN) of=$(SD_DEV) bs=512 seek=2048 conv=notrunc oflag=sync
-	@echo "Done."
+	sync
+	@echo "Verifying..."
+	@sudo dd if=$(SD_DEV) bs=512 skip=2048 count=$$(( ($$(stat -c %s $(APP_BIN)) + 511) / 512 )) status=none \
+	    | cmp -n $$(stat -c %s $(APP_BIN)) - $(APP_BIN) \
+	    && echo "Verify OK: the SD khop voi $(APP_BIN)"
+	-sudo eject $(SD_DEV)
+	@echo "Done - safe to remove the card."
 
 # -------------------------------------------------------
 # 4. Helpers
 # -------------------------------------------------------
 .PHONY: all clean disasm
 
-all: bootloader firmware
+all: bootloader boot_rom firmware
 
 disasm: $(BOOT_DUMP) $(APP_DUMP)
 

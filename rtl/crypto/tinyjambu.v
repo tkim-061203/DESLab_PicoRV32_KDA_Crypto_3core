@@ -462,6 +462,14 @@ module tinyjambu_core(
         end else begin
             done <= 1'b0; valid <= 1'b0;
 
+            // tag/tag_w0_r are only written on encrypt (below), so without
+            // this a decrypt would leave the previous operation's tag on
+            // the output. Clear at the same ena/S_IDLE point the controller
+            // itself uses to accept a new op.
+            if (st == `S_IDLE && ena) begin
+                tag <= 64'h0; tag_w0_r <= 32'h0;
+            end
+
             if (cap_out) begin
                 case (word_idx)
                     2'd0: data_out[127:96] <= bswap32(comb_out_le);

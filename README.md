@@ -81,6 +81,20 @@ All three crypto cores are managed by a unified registers and multiplexer interf
 
 ---
 
+<!-- fmax-table:begin -->
+### FPGA Fmax (Arty A7-100T, post-route)
+
+Source: `scripts/vivado/report_timing_summary.txt` (routed, 2026-08-01). Constraint `clk_100` = 10.000 ns (100 MHz); WHS +0.048 ns, 0 failing / 12,036 endpoints.
+
+| Scope | Slack (WNS) | Est. Fmax |
+| :--- | ---: | ---: |
+| **Full SoC** (`clk_100`) | +0.686 ns | **107.4 MHz** |
+
+> Est. Fmax = 1 / (T − WNS) from the 100 MHz run. This is a lower bound: Vivado stops optimising once the constraint is met, so the real ceiling is somewhat higher — sweep the clock (or use `scripts/vivado/fmax_ooc.tcl` per core) for an exact figure.
+> ⚠ These reports (2026-08-01) predate the 2026-09-25 RTL fixes (Xoodyak length masking, AEAD busy-lock/tag-oracle hardening, UART TX-ready). Re-run `make synth_system` and regenerate this table.
+
+<!-- fmax-table:end -->
+
 ## 4. Software Development Stack
 
 ### Firmware HAL Implementation

@@ -19,7 +19,10 @@
 module system #(
     parameter BOOT_SIZE = 1024,           // 4 KB in words
     parameter APP_SIZE  = 4096,           // 16 KB in words
-    parameter UART_TX_HOLDOFF = 16'd9000
+    // 100 MHz / 868 = 115207 baud (~115200).
+    // Testbenches override with a small value to speed up simulation
+    // (baud timing is irrelevant there; the TB snoops uart_we directly).
+    parameter integer UART_DEFAULT_DIV = 868
 )(
     input            clk,
     input            resetn_btn,
@@ -71,6 +74,7 @@ module system #(
     wire [31:0] uart_dat_do;
     wire [31:0] uart_div_do;
     wire uart_rx_valid = (uart_dat_do != 32'hFFFF_FFFF);
+    wire uart_core_busy;
 
     reg        uart_we;
     reg        uart_rx_rd;
@@ -78,14 +82,14 @@ module system #(
     reg  [3:0] uart_div_we;
     reg [31:0] uart_div_di;
     reg        tx_busy;
-    reg [15:0] tx_countdown;
-    wire uart_tx_ready = !tx_busy;
+    wire uart_tx_ready = !tx_busy && !uart_core_busy;
 
-    simpleuart #(.DEFAULT_DIV(868)) uart_inst (
+    simpleuart #(.DEFAULT_DIV(UART_DEFAULT_DIV)) uart_inst (
         .clk        (clk),
         .resetn     (resetn),
         .ser_tx     (uart_tx),
         .ser_rx     (uart_rx),
+        .tx_busy    (uart_core_busy),
         .reg_div_we (uart_div_we),
         .reg_div_di (uart_div_di),
         .reg_div_do (uart_div_do),
@@ -397,7 +401,7 @@ module system #(
             out_byte_en  <= 0;
             uart_we      <= 0;  uart_rx_rd   <= 0;
             uart_div_we  <= 0;  uart_div_di  <= 0;
-            tx_busy      <= 0;  tx_countdown <= 0;
+            tx_busy      <= 0;
             uart_tx_data <= 0;
             sdspi_tx_data  <= 8'hFF;  sdspi_clkdiv   <= 16'd199;
             sdspi_start    <= 0;      sdspi_cs_n_reg <= 1'b1;
@@ -409,11 +413,10 @@ module system #(
             uart_div_we <= 0;
             sdspi_start <= 0;
 
-            // UART TX busy countdown
-            if (tx_busy) begin
-                if (tx_countdown != 0) tx_countdown <= tx_countdown - 1;
-                else                   tx_busy      <= 0;
-            end
+            // UART TX pending-write flag: covers the 2-cycle gap between
+            // the APB write being accepted and simpleuart latching the
+            // byte into its own send_bitcnt/send_dummy busy state.
+            if (tx_busy && !uart_we) tx_busy <= 0;
 
             // ---- APB WRITE ----
             if (apb_wr) begin
@@ -422,11 +425,10 @@ module system #(
                     case (apb_paddr[4:0])
                         5'h00: begin out_byte_en<=1; out_byte<=apb_pwdata[7:0]; end
                         5'h04: begin
-                            if (!tx_busy) begin
+                            if (uart_tx_ready) begin
                                 uart_tx_data <= apb_pwdata[7:0];
                                 uart_we      <= 1;
                                 tx_busy      <= 1;
-                                tx_countdown <= UART_TX_HOLDOFF;
                             end
                         end
                         5'h10: begin

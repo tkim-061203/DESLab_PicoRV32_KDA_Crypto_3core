@@ -57,8 +57,12 @@ Thumbs.db
 # ============================================================
 # OpenLane generated outputs
 # ============================================================
+runs/
+**/runs/
 /openlane/designs/*/runs/
+openlane/**/runs/
 /openlane/*.log
+openlane/**/*.log
 /openlane2/
 /sim/
 *.gds

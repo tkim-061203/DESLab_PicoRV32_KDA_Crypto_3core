@@ -18,11 +18,10 @@ module system_tb;
 	wire sd_sck;
 	wire sd_mosi;
 
-	integer i;
 	integer cycle_count = 0;
 
 	system #(
-		.UART_TX_HOLDOFF(16'd32)
+		.UART_DEFAULT_DIV(10)
 	) uut (
 		.clk        (clk),
 		.resetn_btn (resetn_btn),
@@ -45,12 +44,16 @@ module system_tb;
 			$dumpvars(0, system_tb);
 		end
 
+		// Preload the app image the bootloader will jump to. system.v
+		// itself loads the real bootloader.hex into boot_mem
+		// (`initial $readmemh("bootloader.hex", boot_mem)`); driving
+		// sw[0]=1 makes bootloader.c take its debug/sim strap and jump
+		// straight to 0x0001_0000 instead of talking to (non-existent)
+		// SD hardware, so this now exercises the real boot ROM code
+		// instead of a hand-poked boot_mem stub that bypassed it.
 		#1;
-		for (i = 0; i < 16; i = i + 1)
-			uut.boot_mem[i] = 32'h0000_0013;
-		uut.boot_mem[0] = 32'h0001_02b7; // lui t0, 0x10  -> 0x0001_0000
-		uut.boot_mem[1] = 32'h0002_8067; // jalr x0, t0, 0
 		$readmemh("sim_app.hex", uut.app_mem);
+		sw <= 4'b0001;
 
 		repeat (100) @(posedge clk);
 		resetn_btn <= 1'b1;

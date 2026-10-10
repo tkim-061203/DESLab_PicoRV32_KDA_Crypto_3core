@@ -175,9 +175,12 @@ SIM_OL_SRC = $(GL_DIR)/system_nl_tb.v \
 	$(OL_RTL) \
 	$(GL_SRAM_SRC)
 
-# GL_FW=smoke routes the console through OUTBYTE instead of the UART.  The
-# netlist hardens UART_TX_HOLDOFF at 9000 and the testbench can no longer
-# override it, so a real serial log costs ~9000 cycles per character.
+# GL_FW=smoke used to route the console through OUTBYTE instead of the UART,
+# because the netlist hardened UART_TX_HOLDOFF at 9000 cycles and the
+# testbench could no longer override it. UART_TX_HOLDOFF has since been
+# removed from the RTL (tx_ready now follows the real UART busy state), so
+# firmware.c no longer has an OUTBYTE-console path; smoke/full now just pick
+# the output hex filename below and build the same firmware.
 GL_FW ?= smoke
 ifeq ($(GL_FW),full)
 GL_APP_HEX = sim_app.hex
@@ -327,7 +330,7 @@ sim_app_gl.elf: ../../firmware/app_crt0.S ../../firmware/firmware.c ../../firmwa
 		-ffreestanding -fno-builtin \
 		-ffunction-sections -fdata-sections \
 		-nostdlib -nostartfiles \
-		-DSKIP_SD_TEST=1 -DGL_SMOKE=1 \
+		-DSKIP_SD_TEST=1 \
 		-Wl,--gc-sections \
 		-T ../../firmware/firmware.ld \
 		-o $@ \
